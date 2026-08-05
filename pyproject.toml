@@ -1,0 +1,44 @@
+[project]
+name = "rock-paper-scissors"
+version = "0.1.0"
+description = "Mid-gesture rock-paper-scissors prediction booth demo"
+readme = "README.md"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+    "mediapipe==0.10.35",
+    "numpy>=2.5.1",
+    "opencv-contrib-python>=5.0.0.93",
+    "torch>=2.13.0",
+]
+
+[project.scripts]
+rps-setup = "rps.cli.setup:main"
+rps-capture = "rps.cli.capture:main"
+rps-train = "rps.cli.train:main"
+rps-evaluate = "rps.cli.evaluate:main"
+rps-preflight = "rps.cli.preflight:main"
+rps-demo = "rps.cli.demo:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=9.1.1",
+    "ruff>=0.16.1",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/rps"]
+
+[tool.pytest.ini_options]
+addopts = "-q"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "SIM"]

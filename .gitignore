@@ -157,6 +157,14 @@ ENV/
 env.bak/
 venv.bak/
 
+# Rock-paper-scissors local data and runtime state
+assets/*.task
+data/landmarks/*
+!data/landmarks/.gitkeep
+reports/
+.rps/
+models/*-candidate.pt
+
 # Spyder project settings
 .spyderproject
 .spyproject
