@@ -4,9 +4,10 @@ An interactive first-to-three student-fair game that predicts a visitor's
 rock-paper-scissors move while their fingers are still moving. MediaPipe tracks one hand,
 a small PyTorch MLP classifies each partial pose, and the game commits to a counter-move
 before the final reveal. As soon as it locks, it declares the gesture it expects so the
-visitor can hold course or try to fool it by switching. The default display is game-first;
-a live graph of the MLP's activations and weighted connections is available as an alternate
-view.
+visitor can hold course or try to fool it by switching. The default display preserves the
+large countdown, prediction, and result presentation while a live inset shows the MLP
+activations and weighted connections. Press `N` to expand the network into a split-screen
+focus view.
 
 The application stores no booth camera frames. The training capture command writes only
 landmark trajectories and pseudonymous session metadata.
@@ -51,7 +52,7 @@ Add `--fullscreen` for the booth display or `--mute` to start without audio. The
 short generated WAV cues through macOS `afplay`; missing audio support degrades silently to
 visual-only play. Controls are:
 
-- `N`: toggle the game and neural-network views
+- `N`: toggle the combined game view and the expanded neural-network focus view
 - `M`: mute or unmute audio
 - `R`: reset current match points
 - `C`: clear all session scores and match totals
@@ -68,18 +69,17 @@ Each trained round follows this timeline:
 250 ms centered closed-fist hold
 ROCK -> PAPER -> SCISSORS at 600 ms intervals, then SHOOT!
 150 ms after SHOOT: continuous partial-pose predictions begin
-200-450 ms: prediction is visibly declared and the AI response locks
+200-450 ms: prediction and AI move are revealed immediately
 650-950 ms: held final pose is scored
-950 ms: locked AI response and result are revealed
+950 ms: final result is scored and revealed
 1.2 s result celebration, then a 200 ms hand-clear before the next round
 ```
 
-The screen freezes the prediction and its lock time immediately. The AI response is already
-committed but stays face-down until scoring. Changing gestures after the declaration is
-allowed: a successful switch is celebrated as fooling the AI. Wins award one point and ties
-award no point. The first player to three wins the match; the match result remains for 2.5
-seconds and then resets after the hand leaves. Session round, streak, tie, and match totals
-remain in memory until `C` is pressed or the app exits.
+The screen immediately shows the prediction, prediction time, and AI move. Changing gestures
+after the reveal is allowed: a successful switch is celebrated as fooling the AI. Wins award
+one point and ties award no point. The first player to three wins the match; the match result
+remains for 2.5 seconds and then resets after the hand leaves. Session round, streak, tie, and
+match totals remain in memory until `C` is pressed or the app exits.
 
 ## Collect training trajectories
 

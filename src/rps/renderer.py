@@ -213,6 +213,40 @@ class BoothRenderer:
         for x, label in zip(columns, ("FEATURES", "LAYER 1", "LAYER 2", "OUTPUT"), strict=True):
             self._put_text(image, label, (x - 35, 88), 0.38, (130, 190, 200))
 
+    def _draw_network_inset(
+        self,
+        image: np.ndarray,
+        snapshot: NetworkSnapshot,
+    ) -> None:
+        canvas = np.full((600, 620, 3), (8, 17, 24), dtype=np.uint8)
+        cv2.rectangle(canvas, (0, 0), (619, 65), (10, 30, 40), -1)
+        self._put_text(
+            canvas,
+            "LIVE NEURAL NETWORK",
+            (30, 45),
+            0.68,
+            (100, 255, 225),
+            2,
+        )
+        self._draw_network(canvas, snapshot, 600)
+
+        left, top, right, bottom = self._network_inset_bounds(image)
+        inset_width = right - left
+        inset_height = bottom - top
+        inset = cv2.resize(canvas, (inset_width, inset_height), interpolation=cv2.INTER_AREA)
+        region = image[top:bottom, left:right]
+        cv2.addWeighted(inset, 0.94, region, 0.06, 0.0, region)
+        cv2.rectangle(image, (left, top), (right, bottom), (80, 210, 195), 2, cv2.LINE_AA)
+
+    @staticmethod
+    def _network_inset_bounds(image: np.ndarray) -> tuple[int, int, int, int]:
+        height, width = image.shape[:2]
+        inset_width = min(540, max(360, int(round(width * 0.42))))
+        inset_height = int(round(inset_width * 600 / 620))
+        left = 20
+        top = max(160, (height - inset_height) // 2)
+        return left, top, min(width, left + inset_width), min(height, top + inset_height)
+
     def _draw_hand(self, image: np.ndarray, landmarks: np.ndarray | None) -> None:
         draw_mirrored_hand(image, landmarks)
 
@@ -297,9 +331,14 @@ class BoothRenderer:
                 1,
             )
 
-    def _draw_progress_bar(self, image: np.ndarray, progress: float) -> None:
-        height, width = image.shape[:2]
-        left, right = width // 2 - 210, width // 2 + 210
+    def _draw_progress_bar(
+        self,
+        image: np.ndarray,
+        progress: float,
+        center_x: int,
+    ) -> None:
+        height = image.shape[0]
+        left, right = center_x - 210, center_x + 210
         top, bottom = height // 2 + 65, height // 2 + 86
         cv2.rectangle(image, (left, top), (right, bottom), (55, 70, 78), -1)
         filled = left + int((right - left) * float(np.clip(progress, 0.0, 1.0)))
@@ -374,9 +413,12 @@ class BoothRenderer:
         height, width = image.shape[:2]
         self._overlay_rect(image, (0, 0), (width, height), (5, 12, 20), 0.48)
         self._draw_hand(image, snapshot.hand_landmarks)
+        self._draw_network_inset(image, snapshot)
         self._draw_scoreboard(image, state)
 
-        center = (width // 2, height // 2 - 20)
+        _, _, inset_right, _ = self._network_inset_bounds(image)
+        game_center_x = (inset_right + width - 20) // 2
+        center = (game_center_x, height // 2 - 70)
         accent = (80, 230, 215)
         if state.phase == RoundPhase.READY:
             self._put_centered(image, "HOLD A FIST TO START", center, 1.05, accent, 3)
@@ -388,7 +430,7 @@ class BoothRenderer:
                 (220, 230, 235),
                 1,
             )
-            self._draw_progress_bar(image, state.ready_progress)
+            self._draw_progress_bar(image, state.ready_progress, center[0])
         elif state.phase == RoundPhase.COUNTDOWN:
             self._put_centered(
                 image,
@@ -418,42 +460,43 @@ class BoothRenderer:
             )
         elif state.phase == RoundPhase.LOCKED:
             predicted = state.locked_user.name if state.locked_user is not None else "?"
+            ai = state.ai_move.name if state.ai_move is not None else "?"
             self._put_centered(
                 image,
                 f"I PREDICT {predicted}",
-                (center[0], center[1] - 25),
+                (center[0], center[1] - 20),
                 1.45,
                 (70, 235, 225),
                 4,
             )
             self._put_centered(
                 image,
-                f"LOCKED IN {state.lock_time_ms or 0} MS",
-                (center[0], center[1] + 30),
+                f"PREDICTED IN {state.lock_time_ms or 0} MS",
+                (center[0], center[1] + 34),
                 0.62,
                 (230, 245, 245),
                 2,
             )
             self._put_centered(
                 image,
-                "Finish your gesture - or change it!",
-                (center[0], center[1] + 72),
+                "Can you switch in time?",
+                (center[0], center[1] + 76),
                 0.52,
                 (230, 240, 240),
                 1,
             )
             self._draw_gesture_card(
                 image,
-                center=(width // 2 - 180, height - 195),
+                center=(center[0] - 160, height - 195),
                 title="PREDICTION",
                 gesture=predicted,
                 color=(70, 235, 225),
             )
             self._draw_gesture_card(
                 image,
-                center=(width // 2 + 180, height - 195),
-                title="AI RESPONSE",
-                gesture="LOCKED",
+                center=(center[0] + 160, height - 195),
+                title="AI MOVE",
+                gesture=ai,
                 color=(70, 190, 245),
             )
         else:
@@ -500,14 +543,14 @@ class BoothRenderer:
             )
             self._draw_gesture_card(
                 image,
-                center=(width // 2 - 180, height - 205),
+                center=(center[0] - 160, height - 205),
                 title="YOU",
                 gesture=user,
                 color=(80, 230, 110),
             )
             self._draw_gesture_card(
                 image,
-                center=(width // 2 + 180, height - 205),
+                center=(center[0] + 160, height - 205),
                 title="AI",
                 gesture=ai,
                 color=(90, 110, 250),
@@ -516,14 +559,14 @@ class BoothRenderer:
                 self._put_centered(
                     image,
                     f"{state.score.user_streak} WIN STREAK!",
-                    (width // 2, 182),
+                    (center[0], 182),
                     0.50,
                     (50, 210, 250),
                     2,
                 )
 
         self._update_effect(image, state)
-        controls = "N network   M mute   R restart match   C clear session   Q quit"
+        controls = "N network focus   M mute   R restart match   C clear session   Q quit"
         self._put_centered(image, controls, (width // 2, height - 20), 0.37, (165, 185, 195), 1)
         status = (
             f"{snapshot.device.upper()} {snapshot.inference_ms:.2f} ms   "
@@ -538,7 +581,8 @@ class BoothRenderer:
         center_x = max(650, width * 3 // 4)
         self._draw_scoreboard(image, state, compact=True)
         cv2.rectangle(image, (center_x - 250, 115), (width - 20, 235), (15, 22, 30), -1)
-        self._put_text(image, state.phase.value, (center_x - 225, 145), 0.60, (80, 230, 220), 2)
+        phase_label = "AI REVEAL" if state.phase == RoundPhase.LOCKED else state.phase.value
+        self._put_text(image, phase_label, (center_x - 225, 145), 0.60, (80, 230, 220), 2)
         self._put_text(image, state.message, (center_x - 225, 180), 0.55, (245, 245, 245), 2)
         if state.countdown_label is not None:
             self._put_text(
@@ -583,16 +627,22 @@ class BoothRenderer:
             )
         elif state.phase == RoundPhase.LOCKED:
             predicted = state.locked_user.name if state.locked_user is not None else "?"
+            ai = state.ai_move.name if state.ai_move is not None else "?"
             self._put_text(
                 image,
-                f"{predicted}  |  LOCKED IN {state.lock_time_ms or 0} MS  |  RESPONSE LOCKED",
+                f"PREDICTED {predicted} IN {state.lock_time_ms or 0} MS  |  AI PLAYS {ai}",
                 (center_x - 225, 218),
                 0.40,
                 (80, 240, 220),
                 1,
             )
         elif state.ai_move is not None:
-            self._put_text(image, "AI response locked", (center_x - 225, 218), 0.48)
+            self._put_text(
+                image,
+                f"AI plays {state.ai_move.name}",
+                (center_x - 225, 218),
+                0.48,
+            )
 
         status_y = height - 35
         status = (
@@ -635,6 +685,14 @@ class BoothRenderer:
             self._draw_hand(image, snapshot.hand_landmarks)
             self._draw_game(image, state, snapshot)
             self._put_text(image, f"FPS {performance.fps:.1f}", (panel_right - 95, 48), 0.45)
+            self._put_text(
+                image,
+                "N game focus   M mute   R restart   C clear   Q quit",
+                (width - 585, height - 20),
+                0.34,
+                (165, 185, 195),
+                1,
+            )
         self._draw_lock_flash(image)
         if not snapshot.trained:
             cv2.rectangle(

@@ -21,6 +21,8 @@ from rps.setup_assets import AssetError, ensure_hand_landmarker_asset
 from rps.temporal import TemporalPolicyArtifactError, load_temporal_policy
 from rps.tracking import AsyncHandTracker
 
+DEFAULT_RENDER_MODE = RenderMode.GAME
+
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Run the live student-fair booth demo")
@@ -103,7 +105,7 @@ def main() -> None:
         )
     renderer = BoothRenderer(loaded.model, loaded.activation_scales)
     audio = AudioFeedback(muted=args.mute)
-    render_mode = RenderMode.GAME
+    render_mode = DEFAULT_RENDER_MODE
     snapshot = NetworkSnapshot(trained=loaded.trained, device=device_name)
     performance = PerformanceStats()
     last_tracker_timestamp = -1

@@ -25,6 +25,34 @@ def test_renderer_handles_no_hand_and_extreme_activations() -> None:
     assert np.any(rendered)
 
 
+def test_default_game_view_includes_live_network_inset(monkeypatch) -> None:
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    renderer = BoothRenderer(GestureMLP(), default_activation_scales())
+    state = GameViewState(RoundPhase.COUNTDOWN, "Get ready", countdown_label="ROCK")
+    snapshot = NetworkSnapshot(trained=True)
+    calls: list[NetworkSnapshot] = []
+    monkeypatch.setattr(
+        renderer,
+        "_draw_network_inset",
+        lambda _image, current_snapshot: calls.append(current_snapshot),
+    )
+
+    renderer.render(frame, state, snapshot)
+
+    assert calls == [snapshot]
+
+
+def test_network_inset_covers_almost_half_the_booth_width() -> None:
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    renderer = BoothRenderer(GestureMLP(), default_activation_scales())
+
+    left, top, right, bottom = renderer._network_inset_bounds(frame)
+
+    assert right - left >= int(frame.shape[1] * 0.40)
+    assert top > 150
+    assert bottom < frame.shape[0] - 30
+
+
 def test_renderer_handles_every_game_phase_in_both_modes() -> None:
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
     renderer = BoothRenderer(GestureMLP(), default_activation_scales())
@@ -90,7 +118,7 @@ def test_renderer_handles_every_game_phase_in_both_modes() -> None:
             assert np.any(rendered)
 
 
-def test_locked_prediction_and_latency_are_visible_without_revealing_response(
+def test_prediction_and_ai_move_are_revealed_on_the_first_decision_frame(
     monkeypatch,
 ) -> None:
     frame = np.zeros((720, 1280, 3), dtype=np.uint8)
@@ -118,9 +146,10 @@ def test_locked_prediction_and_latency_are_visible_without_revealing_response(
         renderer.render(frame, state, snapshot, mode=mode)
         combined = " ".join(rendered_text)
         assert "I PREDICT PAPER" in combined
-        assert "LOCKED IN 246 MS" in combined
-        assert "RESPONSE LOCKED" in combined
-        assert "AI SCISSORS" not in combined
+        assert "PREDICTED IN 246 MS" in combined or "PREDICTED PAPER IN 246 MS" in combined
+        assert "SCISSORS" in combined
+        assert "LOCKED IN" not in combined
+        assert "RESPONSE LOCKED" not in combined
 
 
 def test_lock_flash_triggers_once_on_phase_entry(monkeypatch) -> None:
