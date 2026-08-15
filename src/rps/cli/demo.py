@@ -11,12 +11,17 @@ import torch
 
 from rps.audio import AudioFeedback
 from rps.checkpoint import CheckpointError, load_checkpoint
-from rps.constants import DEFAULT_CHECKPOINT_PATH, DEFAULT_TEMPORAL_POLICY_PATH
+from rps.constants import (
+    DEFAULT_CHECKPOINT_PATH,
+    DEFAULT_SCORE_DB_PATH,
+    DEFAULT_TEMPORAL_POLICY_PATH,
+)
 from rps.device import resolve_device
 from rps.features import InvalidLandmarksError, preprocess_landmarks
 from rps.game import GameConfig, GameController, GameViewState, HandPrediction, RoundPhase
 from rps.model import calibrated_probabilities
 from rps.renderer import BoothRenderer, NetworkSnapshot, PerformanceStats, RenderMode
+from rps.score_store import ScoreStoreError, SQLiteScoreStore
 from rps.setup_assets import AssetError, ensure_hand_landmarker_asset
 from rps.temporal import TemporalPolicyArtifactError, load_temporal_policy
 from rps.tracking import AsyncHandTracker
@@ -30,6 +35,12 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--device", choices=("auto", "cpu", "mps"), default="auto")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT_PATH)
     parser.add_argument("--temporal-policy", type=Path, default=DEFAULT_TEMPORAL_POLICY_PATH)
+    parser.add_argument(
+        "--score-db",
+        type=Path,
+        default=DEFAULT_SCORE_DB_PATH,
+        help="SQLite database used to restore booth scores after a restart",
+    )
     parser.add_argument(
         "--shadow-temporal-policy",
         type=Path,
@@ -57,10 +68,17 @@ def main() -> None:
     except (AssetError, CheckpointError, RuntimeError) as error:
         raise SystemExit(str(error)) from error
 
+    try:
+        score_store = SQLiteScoreStore(args.score_db)
+        restored_score = score_store.load()
+    except ScoreStoreError as error:
+        raise SystemExit(str(error)) from error
+
     camera = cv2.VideoCapture(args.camera)
     camera.set(cv2.CAP_PROP_FRAME_WIDTH, 1280)
     camera.set(cv2.CAP_PROP_FRAME_HEIGHT, 720)
     if not camera.isOpened():
+        score_store.close()
         raise SystemExit(f"Could not open camera {args.camera}")
 
     window_name = "Mid-Gesture RPS AI"
@@ -89,7 +107,17 @@ def main() -> None:
     else:
         print("Temporal policy not found; using baseline", file=sys.stderr)
 
-    controller = GameController(GameConfig(temporal_policy=temporal_config))
+    controller = GameController(
+        GameConfig(temporal_policy=temporal_config),
+        score=restored_score,
+    )
+    persisted_score = controller.view(0).score
+    try:
+        score_store.save(persisted_score)
+    except ScoreStoreError as error:
+        camera.release()
+        score_store.close()
+        raise SystemExit(str(error)) from error
     shadow_controller = None
     if args.shadow_temporal_policy is not None:
         try:
@@ -99,9 +127,13 @@ def main() -> None:
                 checkpoint_path=args.checkpoint,
             )
         except TemporalPolicyArtifactError as error:
+            camera.release()
+            cv2.destroyAllWindows()
+            score_store.close()
             raise SystemExit(f"Shadow temporal policy is invalid: {error}") from error
         shadow_controller = GameController(
-            GameConfig(temporal_policy=shadow_artifact.config)
+            GameConfig(temporal_policy=shadow_artifact.config),
+            score=persisted_score,
         )
     renderer = BoothRenderer(loaded.model, loaded.activation_scales)
     audio = AudioFeedback(muted=args.mute)
@@ -195,6 +227,9 @@ def main() -> None:
                     if loaded.trained
                     else _untrained_state()
                 )
+                if state.score != persisted_score:
+                    score_store.save(state.score)
+                    persisted_score = state.score
                 if loaded.trained and shadow_controller is not None:
                     shadow_state = shadow_controller.update(now_ms, latest_prediction)
                     if (
@@ -243,17 +278,24 @@ def main() -> None:
                     print(f"Audio {'muted' if muted else 'enabled'}")
                 elif key in {ord("r"), ord("R")}:
                     controller.reset_match()
+                    persisted_score = controller.view(now_ms).score
+                    score_store.save(persisted_score)
                     if shadow_controller is not None:
                         shadow_controller.reset_match()
                     shadow_round_logged = False
                 elif key in {ord("c"), ord("C")}:
                     controller.reset_session()
+                    persisted_score = controller.view(now_ms).score
+                    score_store.save(persisted_score)
                     if shadow_controller is not None:
                         shadow_controller.reset_session()
                     shadow_round_logged = False
+    except ScoreStoreError as error:
+        raise SystemExit(str(error)) from error
     finally:
         camera.release()
         cv2.destroyAllWindows()
+        score_store.close()
 
 
 if __name__ == "__main__":

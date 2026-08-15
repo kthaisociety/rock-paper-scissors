@@ -189,10 +189,17 @@ def lock_from_probability_trace(
 
 
 class GameController:
-    def __init__(self, config: GameConfig | None = None) -> None:
+    def __init__(
+        self,
+        config: GameConfig | None = None,
+        *,
+        score: ScoreSnapshot | None = None,
+    ) -> None:
         self.config = config or GameConfig()
         self._event_id = 0
         self.reset_session()
+        if score is not None:
+            self.restore_score(score)
 
     def reset_round(self) -> None:
         self.phase = RoundPhase.READY
@@ -232,6 +239,45 @@ class GameController:
         self.ai_matches = 0
         self.rounds_played = 0
         self.reset_match()
+
+    def restore_score(self, score: ScoreSnapshot) -> None:
+        """Restore durable scores and always resume from a safe ready phase."""
+
+        score_values = (
+            score.user_points,
+            score.ai_points,
+            score.ties,
+            score.user_round_wins,
+            score.ai_round_wins,
+            score.user_streak,
+            score.ai_streak,
+            score.best_user_streak,
+            score.user_matches,
+            score.ai_matches,
+            score.rounds_played,
+        )
+        if any(value < 0 for value in score_values):
+            raise ValueError("Score values cannot be negative")
+        if score.target_points <= 0:
+            raise ValueError("target_points must be positive")
+
+        completed_match = (
+            score.target_points != self.config.target_points
+            or score.user_points >= score.target_points
+            or score.ai_points >= score.target_points
+        )
+        self.user_points = 0 if completed_match else score.user_points
+        self.ai_points = 0 if completed_match else score.ai_points
+        self.user_streak = 0 if completed_match else score.user_streak
+        self.ai_streak = 0 if completed_match else score.ai_streak
+        self.ties = score.ties
+        self.user_round_wins = score.user_round_wins
+        self.ai_round_wins = score.ai_round_wins
+        self.best_user_streak = score.best_user_streak
+        self.user_matches = score.user_matches
+        self.ai_matches = score.ai_matches
+        self.rounds_played = score.rounds_played
+        self.reset_round()
 
     def reset(self) -> None:
         """Backward-compatible full reset."""

@@ -79,7 +79,11 @@ The screen immediately shows the prediction, prediction time, and AI move. Chang
 after the reveal is allowed: a successful switch is celebrated as fooling the AI. Wins award
 one point and ties award no point. The first player to three wins the match; the match result
 remains for 2.5 seconds and then resets after the hand leaves. Session round, streak, tie, and
-match totals remain in memory until `C` is pressed or the app exits.
+match totals are saved after every result to `.rps/scores.sqlite3`. If the demo or Mac
+restarts, the next launch restores the current match and fair-wide totals. Pressing `C`
+clears both the screen and the saved totals. Use `--score-db PATH` to store the database
+somewhere else; the default runtime database is ignored by Git and contains scores only,
+never camera frames or landmarks.
 
 ## Collect training trajectories
 
