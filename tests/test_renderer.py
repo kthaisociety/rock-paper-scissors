@@ -52,13 +52,16 @@ def test_renderer_handles_every_game_phase_in_both_modes() -> None:
         GameViewState(RoundPhase.PREDICTING, "Shoot", score=score),
         GameViewState(
             RoundPhase.LOCKED,
-            "AI move sealed",
+            "I PREDICT ROCK",
+            locked_user=Gesture.ROCK,
             ai_move=Gesture.PAPER,
+            lock_time_ms=246,
             score=score,
         ),
         GameViewState(
             RoundPhase.RESULT,
-            "YOU WIN",
+            "YOU FOOLED THE AI!",
+            locked_user=Gesture.ROCK,
             ai_move=Gesture.PAPER,
             final_user=Gesture.SCISSORS,
             outcome=Outcome.USER_WIN,
@@ -69,6 +72,7 @@ def test_renderer_handles_every_game_phase_in_both_modes() -> None:
         GameViewState(
             RoundPhase.MATCH_OVER,
             "YOU WIN THE MATCH",
+            locked_user=Gesture.ROCK,
             ai_move=Gesture.PAPER,
             final_user=Gesture.SCISSORS,
             outcome=Outcome.USER_WIN,
@@ -84,3 +88,57 @@ def test_renderer_handles_every_game_phase_in_both_modes() -> None:
             assert rendered.shape == frame.shape
             assert rendered.dtype == np.uint8
             assert np.any(rendered)
+
+
+def test_locked_prediction_and_latency_are_visible_without_revealing_response(
+    monkeypatch,
+) -> None:
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    state = GameViewState(
+        RoundPhase.LOCKED,
+        "I PREDICT PAPER",
+        locked_user=Gesture.PAPER,
+        ai_move=Gesture.SCISSORS,
+        lock_time_ms=246,
+    )
+    snapshot = NetworkSnapshot(trained=True)
+
+    def recorder_for(rendered_text: list[str]):
+        def record_text(_image, text, *_args, **_kwargs) -> None:
+            rendered_text.append(text)
+
+        return record_text
+
+    for mode in RenderMode:
+        renderer = BoothRenderer(GestureMLP(), default_activation_scales())
+        rendered_text: list[str] = []
+        record_text = recorder_for(rendered_text)
+        monkeypatch.setattr(renderer, "_put_centered", record_text)
+        monkeypatch.setattr(renderer, "_put_text", record_text)
+        renderer.render(frame, state, snapshot, mode=mode)
+        combined = " ".join(rendered_text)
+        assert "I PREDICT PAPER" in combined
+        assert "LOCKED IN 246 MS" in combined
+        assert "RESPONSE LOCKED" in combined
+        assert "AI SCISSORS" not in combined
+
+
+def test_lock_flash_triggers_once_on_phase_entry(monkeypatch) -> None:
+    frame = np.zeros((720, 1280, 3), dtype=np.uint8)
+    renderer = BoothRenderer(GestureMLP(), default_activation_scales())
+    state = GameViewState(
+        RoundPhase.LOCKED,
+        "I PREDICT ROCK",
+        locked_user=Gesture.ROCK,
+        ai_move=Gesture.PAPER,
+        lock_time_ms=246,
+    )
+    snapshot = NetworkSnapshot(trained=True)
+    clock = [1.0]
+    monkeypatch.setattr("rps.renderer.time.monotonic", lambda: clock[0])
+
+    first_frame = renderer.render(frame, state, snapshot)
+    clock[0] = 1.3
+    later_frame = renderer.render(frame, state, snapshot)
+
+    assert float(np.mean(first_frame)) > float(np.mean(later_frame))

@@ -3,8 +3,10 @@
 An interactive first-to-three student-fair game that predicts a visitor's
 rock-paper-scissors move while their fingers are still moving. MediaPipe tracks one hand,
 a small PyTorch MLP classifies each partial pose, and the game commits to a counter-move
-before the final reveal. The default display is game-first; a live graph of the MLP's
-activations and weighted connections is available as an alternate view.
+before the final reveal. As soon as it locks, it declares the gesture it expects so the
+visitor can hold course or try to fool it by switching. The default display is game-first;
+a live graph of the MLP's activations and weighted connections is available as an alternate
+view.
 
 The application stores no booth camera frames. The training capture command writes only
 landmark trajectories and pseudonymous session metadata.
@@ -66,16 +68,18 @@ Each trained round follows this timeline:
 250 ms centered closed-fist hold
 ROCK -> PAPER -> SCISSORS at 600 ms intervals, then SHOOT!
 150 ms after SHOOT: continuous partial-pose predictions begin
-200-450 ms: early confidence lock or forced deadline lock
+200-450 ms: prediction is visibly declared and the AI response locks
 650-950 ms: held final pose is scored
-950 ms: sealed AI move and result are revealed
+950 ms: locked AI response and result are revealed
 1.2 s result celebration, then a 200 ms hand-clear before the next round
 ```
 
-The AI move is hidden after it locks so the visitor cannot change their move in response.
-Wins award one point and ties award no point. The first player to three wins the match; the
-match result remains for 2.5 seconds and then resets after the hand leaves. Session round,
-streak, tie, and match totals remain in memory until `C` is pressed or the app exits.
+The screen freezes the prediction and its lock time immediately. The AI response is already
+committed but stays face-down until scoring. Changing gestures after the declaration is
+allowed: a successful switch is celebrated as fooling the AI. Wins award one point and ties
+award no point. The first player to three wins the match; the match result remains for 2.5
+seconds and then resets after the hand leaves. Session round, streak, tie, and match totals
+remain in memory until `C` is pressed or the app exits.
 
 ## Collect training trajectories
 

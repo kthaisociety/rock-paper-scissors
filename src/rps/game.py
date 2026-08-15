@@ -123,6 +123,18 @@ def score_round(ai_move: Gesture, user_move: Gesture) -> Outcome:
     return Outcome.USER_WIN
 
 
+def prediction_result_message(
+    predicted_user: Gesture,
+    final_user: Gesture,
+    outcome: Outcome,
+) -> str:
+    if predicted_user == final_user:
+        return "AI CALLED IT!"
+    if outcome == Outcome.USER_WIN:
+        return "YOU FOOLED THE AI!"
+    return "YOU SWITCHED - DRAW!"
+
+
 LockDecision = TemporalDecision
 
 
@@ -291,7 +303,7 @@ class GameController:
         self.lock_time_ms = decision.lock_time_ms
         self.lock_reason = decision.reason
         self.phase = RoundPhase.LOCKED
-        self._message = "AI MOVE LOCKED"
+        self._message = f"I PREDICT {self.locked_user.name}"
 
     def update(self, timestamp_ms: int, hand_result: HandPrediction | None) -> GameViewState:
         hand_present = hand_result is not None
@@ -394,10 +406,19 @@ class GameController:
                 self._result_timestamp = timestamp_ms
                 if self.phase == RoundPhase.MATCH_OVER:
                     assert self.match_winner is not None
-                    self._message = f"{self.match_winner.value} WINS THE MATCH"
+                    self._message = (
+                        "YOU WIN THE MATCH"
+                        if self.match_winner == MatchWinner.USER
+                        else "AI WINS THE MATCH"
+                    )
                 else:
                     assert self.outcome is not None
-                    self._message = self.outcome.value
+                    assert self.locked_user is not None
+                    self._message = prediction_result_message(
+                        self.locked_user,
+                        self.final_user,
+                        self.outcome,
+                    )
 
         if self.phase in {RoundPhase.RESULT, RoundPhase.MATCH_OVER}:
             assert self._result_timestamp is not None

@@ -8,7 +8,7 @@ import cv2
 import numpy as np
 
 from rps.features import LANDMARK_GROUPS, group_feature_indices, summarize_feature_groups
-from rps.game import GameViewState, Outcome, RoundPhase
+from rps.game import GameViewState, Outcome, RoundPhase, prediction_result_message
 from rps.landmark_drawing import draw_mirrored_hand
 from rps.model import CLASS_NAMES, GestureMLP
 
@@ -60,6 +60,8 @@ class BoothRenderer:
         self._effect_event_id = -1
         self._effect_started = 0.0
         self._particles: list[_Particle] = []
+        self._last_phase: RoundPhase | None = None
+        self._lock_started = float("-inf")
 
     @staticmethod
     def _positions(x: int, top: int, bottom: int, count: int) -> list[tuple[int, int]]:
@@ -213,6 +215,24 @@ class BoothRenderer:
 
     def _draw_hand(self, image: np.ndarray, landmarks: np.ndarray | None) -> None:
         draw_mirrored_hand(image, landmarks)
+
+    def _track_phase_effects(self, state: GameViewState) -> None:
+        if state.phase == RoundPhase.LOCKED and self._last_phase != RoundPhase.LOCKED:
+            self._lock_started = time.monotonic()
+        self._last_phase = state.phase
+
+    def _draw_lock_flash(self, image: np.ndarray) -> None:
+        elapsed = time.monotonic() - self._lock_started
+        if not 0.0 <= elapsed < 0.18:
+            return
+        height, width = image.shape[:2]
+        self._overlay_rect(
+            image,
+            (0, 0),
+            (width, height),
+            (230, 220, 60),
+            0.14 * (1.0 - elapsed / 0.18),
+        )
 
     def _draw_scoreboard(
         self,
@@ -397,27 +417,87 @@ class BoothRenderer:
                 1,
             )
         elif state.phase == RoundPhase.LOCKED:
-            self._put_centered(image, "AI MOVE SEALED", center, 1.35, (70, 210, 245), 3)
+            predicted = state.locked_user.name if state.locked_user is not None else "?"
             self._put_centered(
                 image,
-                "Hold your final pose",
-                (center[0], center[1] + 62),
-                0.65,
-                (230, 240, 240),
+                f"I PREDICT {predicted}",
+                (center[0], center[1] - 25),
+                1.45,
+                (70, 235, 225),
+                4,
+            )
+            self._put_centered(
+                image,
+                f"LOCKED IN {state.lock_time_ms or 0} MS",
+                (center[0], center[1] + 30),
+                0.62,
+                (230, 245, 245),
                 2,
+            )
+            self._put_centered(
+                image,
+                "Finish your gesture - or change it!",
+                (center[0], center[1] + 72),
+                0.52,
+                (230, 240, 240),
+                1,
             )
             self._draw_gesture_card(
                 image,
-                center=(width // 2, height - 190),
-                title="AI",
-                gesture="SEALED",
-                color=(70, 210, 245),
+                center=(width // 2 - 180, height - 195),
+                title="PREDICTION",
+                gesture=predicted,
+                color=(70, 235, 225),
+            )
+            self._draw_gesture_card(
+                image,
+                center=(width // 2 + 180, height - 195),
+                title="AI RESPONSE",
+                gesture="LOCKED",
+                color=(70, 190, 245),
             )
         else:
             result_color = self._outcome_color(state)
-            self._put_centered(image, state.message, center, 1.25, result_color, 3)
+            title_y = center[1] - (40 if state.phase == RoundPhase.MATCH_OVER else 10)
+            self._put_centered(
+                image,
+                state.message,
+                (center[0], title_y),
+                1.25,
+                result_color,
+                3,
+            )
             user = state.final_user.name if state.final_user is not None else "?"
             ai = state.ai_move.name if state.ai_move is not None else "?"
+            predicted = state.locked_user.name if state.locked_user is not None else "?"
+            comparison_y = title_y + 62
+            if (
+                state.phase == RoundPhase.MATCH_OVER
+                and state.locked_user is not None
+                and state.final_user is not None
+                and state.outcome is not None
+            ):
+                self._put_centered(
+                    image,
+                    prediction_result_message(
+                        state.locked_user,
+                        state.final_user,
+                        state.outcome,
+                    ),
+                    (center[0], comparison_y),
+                    0.58,
+                    result_color,
+                    2,
+                )
+                comparison_y += 42
+            self._put_centered(
+                image,
+                f"PREDICTED {predicted}  |  FINAL {user}",
+                (center[0], comparison_y),
+                0.48,
+                (220, 235, 235),
+                1,
+            )
             self._draw_gesture_card(
                 image,
                 center=(width // 2 - 180, height - 205),
@@ -436,8 +516,8 @@ class BoothRenderer:
                 self._put_centered(
                     image,
                     f"{state.score.user_streak} WIN STREAK!",
-                    (width // 2, center[1] + 65),
-                    0.60,
+                    (width // 2, 182),
+                    0.50,
                     (50, 210, 250),
                     2,
                 )
@@ -472,9 +552,47 @@ class BoothRenderer:
         if state.phase in {RoundPhase.RESULT, RoundPhase.MATCH_OVER}:
             user = state.final_user.name if state.final_user is not None else "?"
             ai = state.ai_move.name if state.ai_move is not None else "?"
-            self._put_text(image, f"YOU: {user}   AI: {ai}", (center_x - 225, 218), 0.52)
+            predicted = state.locked_user.name if state.locked_user is not None else "?"
+            detail_y = 218
+            detail_scale = 0.44
+            if (
+                state.phase == RoundPhase.MATCH_OVER
+                and state.locked_user is not None
+                and state.final_user is not None
+                and state.outcome is not None
+            ):
+                self._put_text(
+                    image,
+                    prediction_result_message(
+                        state.locked_user,
+                        state.final_user,
+                        state.outcome,
+                    ),
+                    (center_x - 225, 205),
+                    0.40,
+                    self._outcome_color(state),
+                    1,
+                )
+                detail_y = 229
+                detail_scale = 0.36
+            self._put_text(
+                image,
+                f"PREDICTED {predicted}  |  FINAL {user}  |  AI {ai}",
+                (center_x - 225, detail_y),
+                detail_scale,
+            )
+        elif state.phase == RoundPhase.LOCKED:
+            predicted = state.locked_user.name if state.locked_user is not None else "?"
+            self._put_text(
+                image,
+                f"{predicted}  |  LOCKED IN {state.lock_time_ms or 0} MS  |  RESPONSE LOCKED",
+                (center_x - 225, 218),
+                0.40,
+                (80, 240, 220),
+                1,
+            )
         elif state.ai_move is not None:
-            self._put_text(image, "AI move sealed", (center_x - 225, 218), 0.48)
+            self._put_text(image, "AI response locked", (center_x - 225, 218), 0.48)
 
         status_y = height - 35
         status = (
@@ -496,6 +614,7 @@ class BoothRenderer:
         mode = RenderMode(mode)
         image = cv2.flip(frame_bgr, 1)
         height, width = image.shape[:2]
+        self._track_phase_effects(state)
         if mode == RenderMode.GAME:
             self._draw_game_first(image, state, snapshot, performance)
         else:
@@ -516,6 +635,7 @@ class BoothRenderer:
             self._draw_hand(image, snapshot.hand_landmarks)
             self._draw_game(image, state, snapshot)
             self._put_text(image, f"FPS {performance.fps:.1f}", (panel_right - 95, 48), 0.45)
+        self._draw_lock_flash(image)
         if not snapshot.trained:
             cv2.rectangle(
                 image,

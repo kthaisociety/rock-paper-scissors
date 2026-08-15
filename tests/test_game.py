@@ -11,6 +11,7 @@ from rps.game import (
     RoundPhase,
     counter_move,
     lock_from_probability_trace,
+    prediction_result_message,
     score_round,
 )
 
@@ -26,6 +27,21 @@ def test_counter_moves_and_scoring() -> None:
     assert score_round(Gesture.PAPER, Gesture.ROCK) == Outcome.AI_WIN
     assert score_round(Gesture.ROCK, Gesture.ROCK) == Outcome.TIE
     assert score_round(Gesture.SCISSORS, Gesture.ROCK) == Outcome.USER_WIN
+
+
+def test_prediction_result_messages_cover_called_fooled_and_switched_draw() -> None:
+    assert (
+        prediction_result_message(Gesture.ROCK, Gesture.ROCK, Outcome.AI_WIN)
+        == "AI CALLED IT!"
+    )
+    assert (
+        prediction_result_message(Gesture.ROCK, Gesture.SCISSORS, Outcome.USER_WIN)
+        == "YOU FOOLED THE AI!"
+    )
+    assert (
+        prediction_result_message(Gesture.ROCK, Gesture.PAPER, Outcome.TIE)
+        == "YOU SWITCHED - DRAW!"
+    )
 
 
 def test_trace_locks_early_after_three_stable_predictions() -> None:
@@ -59,12 +75,14 @@ def test_controller_runs_complete_round() -> None:
     assert state.locked_user == Gesture.ROCK
     assert state.ai_move == Gesture.PAPER
     assert state.prediction_lead_ms == 710
+    assert state.message == "I PREDICT ROCK"
 
     controller.update(650, prediction(650, (0.9, 0.05, 0.05)))
     controller.update(800, prediction(800, (0.9, 0.05, 0.05)))
     state = controller.update(950, prediction(950, (0.9, 0.05, 0.05)))
     assert state.phase == RoundPhase.RESULT
     assert state.outcome == Outcome.AI_WIN
+    assert state.message == "AI CALLED IT!"
 
 
 def test_controller_invalidates_round_with_no_prediction() -> None:
@@ -152,6 +170,7 @@ def test_scores_wins_ties_and_streaks_exactly_once() -> None:
         controller, started_ms=0, final_values=(0.05, 0.05, 0.9)
     )
     assert state.outcome == Outcome.USER_WIN
+    assert state.message == "YOU FOOLED THE AI!"
     assert state.score.user_points == 1
     assert state.score.user_streak == state.score.best_user_streak == 1
     assert state.score.rounds_played == 1
@@ -164,6 +183,7 @@ def test_scores_wins_ties_and_streaks_exactly_once() -> None:
         controller, started_ms=2000, final_values=(0.05, 0.9, 0.05)
     )
     assert state.outcome == Outcome.TIE
+    assert state.message == "YOU SWITCHED - DRAW!"
     assert state.score.ties == 1
     assert state.score.user_points == 1
     assert state.score.user_streak == 1
@@ -173,6 +193,7 @@ def test_scores_wins_ties_and_streaks_exactly_once() -> None:
         controller, started_ms=4000, final_values=(0.9, 0.05, 0.05)
     )
     assert state.outcome == Outcome.AI_WIN
+    assert state.message == "AI CALLED IT!"
     assert state.score.ai_points == 1
     assert state.score.ai_streak == 1
     assert state.score.user_streak == 0
@@ -196,6 +217,7 @@ def test_first_to_three_enters_match_over_and_preserves_session_totals() -> None
     assert state.score.user_matches == 1
     assert state.score.user_round_wins == 3
     assert state.effect_event == "user_match"
+    assert state.message == "YOU WIN THE MATCH"
 
     controller.reset_match()
     state = controller.view(7000)

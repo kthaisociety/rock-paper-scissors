@@ -61,6 +61,7 @@ class AudioFeedback:
         return {
             "countdown": ((520.0, 0.07),),
             "shoot": ((780.0, 0.06), (980.0, 0.09)),
+            "lock": ((1040.0, 0.045), (1320.0, 0.07)),
             "user_win": ((620.0, 0.08), (820.0, 0.12)),
             "ai_win": ((340.0, 0.10), (230.0, 0.14)),
             "tie": ((440.0, 0.08), (440.0, 0.08)),
@@ -109,6 +110,8 @@ class AudioFeedback:
             self.play("countdown")
         if state.phase == RoundPhase.PREDICTING and self._last_phase != RoundPhase.PREDICTING:
             self.play("shoot")
+        if state.phase == RoundPhase.LOCKED and self._last_phase != RoundPhase.LOCKED:
+            self.play("lock")
         if state.effect_event is not None and state.event_id != self._last_event_id:
             cue = {
                 "user_win": "user_win",
