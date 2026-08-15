@@ -10,6 +10,7 @@ from rps.data import TARGET_TIMES_MS, Trajectory
 from rps.features import preprocess_landmarks
 from rps.game import Gesture, counter_move, lock_from_probability_trace, score_round
 from rps.model import CLASS_NAMES, GestureMLP, calibrated_probabilities
+from rps.temporal import LockReason, TemporalPolicyConfig
 
 
 def confusion_matrix(labels: np.ndarray, predictions: np.ndarray) -> np.ndarray:
@@ -61,13 +62,13 @@ def predict_features(
     return calibrated_probabilities(output.logits, temperature).cpu().numpy()
 
 
-def trajectory_probabilities(
+def trajectory_observations(
     model: GestureMLP,
     trajectory: Trajectory,
     *,
     temperature: float,
     device: torch.device | str,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     features: list[np.ndarray] = []
     timestamps: list[int] = []
     for landmarks, handedness, timestamp in zip(
@@ -82,14 +83,32 @@ def trajectory_probabilities(
         except ValueError:
             continue
     if not features:
-        return np.empty(0, dtype=np.int64), np.empty((0, 3), dtype=np.float32)
+        return (
+            np.empty(0, dtype=np.int64),
+            np.empty((0, 3), dtype=np.float32),
+            np.empty((0, 63), dtype=np.float32),
+        )
+    feature_array = np.stack(features)
     probabilities = predict_features(
         model,
-        np.stack(features),
+        feature_array,
         temperature=temperature,
         device=device,
     )
-    return np.asarray(timestamps, dtype=np.int64), probabilities
+    return np.asarray(timestamps, dtype=np.int64), probabilities, feature_array
+
+
+def trajectory_probabilities(
+    model: GestureMLP,
+    trajectory: Trajectory,
+    *,
+    temperature: float,
+    device: torch.device | str,
+) -> tuple[np.ndarray, np.ndarray]:
+    timestamps, probabilities, _ = trajectory_observations(
+        model, trajectory, temperature=temperature, device=device
+    )
+    return timestamps, probabilities
 
 
 def evaluate_trajectories(
@@ -98,6 +117,7 @@ def evaluate_trajectories(
     *,
     temperature: float,
     device: torch.device | str,
+    temporal_config: TemporalPolicyConfig | None = None,
 ) -> dict[str, Any]:
     final_labels: list[int] = []
     final_predictions: list[int] = []
@@ -107,9 +127,11 @@ def evaluate_trajectories(
     outcomes: defaultdict[str, int] = defaultdict(int)
     timestamp_correct: dict[int, list[bool]] = {target: [] for target in TARGET_TIMES_MS}
     participant_correct: defaultdict[str, list[bool]] = defaultdict(list)
+    reason_counts: defaultdict[str, int] = defaultdict(int)
+    state_counts: defaultdict[str, int] = defaultdict(int)
 
     for trajectory in trajectories:
-        timestamps, probabilities = trajectory_probabilities(
+        timestamps, probabilities, features = trajectory_observations(
             model, trajectory, temperature=temperature, device=device
         )
         if not len(timestamps):
@@ -126,7 +148,12 @@ def evaluate_trajectories(
             final_labels.append(trajectory.label)
             final_predictions.append(final_prediction)
 
-        decision = lock_from_probability_trace(timestamps, probabilities)
+        decision = lock_from_probability_trace(
+            timestamps,
+            probabilities,
+            features=features,
+            temporal_config=temporal_config,
+        )
         if decision.gesture is not None and decision.lock_time_ms is not None:
             prediction = int(decision.gesture)
             correct = prediction == trajectory.label
@@ -136,6 +163,9 @@ def evaluate_trajectories(
             participant_correct[trajectory.participant].append(correct)
             outcome = score_round(counter_move(Gesture(prediction)), Gesture(trajectory.label))
             outcomes[outcome.value] += 1
+            if decision.reason is not None:
+                reason_counts[decision.reason.value] += 1
+            state_counts[decision.state.value] += 1
 
     final_report = classification_report(
         np.asarray(final_labels, dtype=np.int64), np.asarray(final_predictions, dtype=np.int64)
@@ -151,7 +181,21 @@ def evaluate_trajectories(
             for target, values in timestamp_correct.items()
         },
         "median_lock_time_ms": float(np.median(lock_times)) if lock_times else None,
+        "p90_lock_time_ms": float(np.percentile(lock_times, 90)) if lock_times else None,
         "median_prediction_lead_ms": (float(950 - np.median(lock_times)) if lock_times else None),
+        "locked_by_ms": {
+            str(deadline): (
+                float(np.mean(np.asarray(lock_times) <= deadline)) if lock_times else 0.0
+            )
+            for deadline in (200, 250, 300, 350)
+        },
+        "forced_lock_rate": (
+            float(reason_counts[LockReason.FORCED_DEADLINE.value] / len(lock_times))
+            if lock_times
+            else 0.0
+        ),
+        "lock_reasons": dict(reason_counts),
+        "lock_states": dict(state_counts),
         "outcomes": dict(outcomes),
         "per_participant_lock_accuracy": {
             participant: float(np.mean(values))

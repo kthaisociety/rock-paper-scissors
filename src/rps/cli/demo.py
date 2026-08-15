@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import sys
 import time
 from pathlib import Path
 
@@ -8,14 +9,16 @@ import cv2
 import numpy as np
 import torch
 
+from rps.audio import AudioFeedback
 from rps.checkpoint import CheckpointError, load_checkpoint
-from rps.constants import DEFAULT_CHECKPOINT_PATH
+from rps.constants import DEFAULT_CHECKPOINT_PATH, DEFAULT_TEMPORAL_POLICY_PATH
 from rps.device import resolve_device
 from rps.features import InvalidLandmarksError, preprocess_landmarks
-from rps.game import GameController, GameViewState, HandPrediction, RoundPhase
+from rps.game import GameConfig, GameController, GameViewState, HandPrediction, RoundPhase
 from rps.model import calibrated_probabilities
-from rps.renderer import BoothRenderer, NetworkSnapshot, PerformanceStats
+from rps.renderer import BoothRenderer, NetworkSnapshot, PerformanceStats, RenderMode
 from rps.setup_assets import AssetError, ensure_hand_landmarker_asset
+from rps.temporal import TemporalPolicyArtifactError, load_temporal_policy
 from rps.tracking import AsyncHandTracker
 
 
@@ -24,7 +27,14 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--camera", type=int, default=0)
     parser.add_argument("--device", choices=("auto", "cpu", "mps"), default="auto")
     parser.add_argument("--checkpoint", type=Path, default=DEFAULT_CHECKPOINT_PATH)
+    parser.add_argument("--temporal-policy", type=Path, default=DEFAULT_TEMPORAL_POLICY_PATH)
+    parser.add_argument(
+        "--shadow-temporal-policy",
+        type=Path,
+        help="Run a matching candidate in parallel without letting it control gameplay",
+    )
     parser.add_argument("--fullscreen", action="store_true")
+    parser.add_argument("--mute", action="store_true", help="Start with sound cues muted")
     return parser
 
 
@@ -56,14 +66,51 @@ def main() -> None:
     if args.fullscreen:
         cv2.setWindowProperty(window_name, cv2.WND_PROP_FULLSCREEN, cv2.WINDOW_FULLSCREEN)
 
-    controller = GameController()
+    temporal_config = None
+    if args.temporal_policy.exists():
+        try:
+            artifact = load_temporal_policy(
+                args.temporal_policy,
+                model_data_fingerprint=loaded.data_fingerprint,
+                checkpoint_path=args.checkpoint,
+            )
+        except TemporalPolicyArtifactError as error:
+            print(f"Temporal policy ignored; using baseline: {error}", file=sys.stderr)
+        else:
+            if artifact.status != "promoted":
+                print(
+                    "Temporal policy is not promoted; using baseline",
+                    file=sys.stderr,
+                )
+            else:
+                temporal_config = artifact.config
+    else:
+        print("Temporal policy not found; using baseline", file=sys.stderr)
+
+    controller = GameController(GameConfig(temporal_policy=temporal_config))
+    shadow_controller = None
+    if args.shadow_temporal_policy is not None:
+        try:
+            shadow_artifact = load_temporal_policy(
+                args.shadow_temporal_policy,
+                model_data_fingerprint=loaded.data_fingerprint,
+                checkpoint_path=args.checkpoint,
+            )
+        except TemporalPolicyArtifactError as error:
+            raise SystemExit(f"Shadow temporal policy is invalid: {error}") from error
+        shadow_controller = GameController(
+            GameConfig(temporal_policy=shadow_artifact.config)
+        )
     renderer = BoothRenderer(loaded.model, loaded.activation_scales)
+    audio = AudioFeedback(muted=args.mute)
+    render_mode = RenderMode.GAME
     snapshot = NetworkSnapshot(trained=loaded.trained, device=device_name)
     performance = PerformanceStats()
     last_tracker_timestamp = -1
     latest_prediction: HandPrediction | None = None
     latest_observation_timestamp = -1
     frame_started = time.perf_counter()
+    shadow_round_logged = False
 
     try:
         with AsyncHandTracker(asset_path) as tracker:
@@ -118,6 +165,7 @@ def main() -> None:
                                     0.2 <= float(np.mean(observation.landmarks[:, 0])) <= 0.8
                                     and 0.15 <= float(np.mean(observation.landmarks[:, 1])) <= 0.85
                                 ),
+                                features=features,
                             )
                             latest_observation_timestamp = observation.timestamp_ms
                             snapshot = NetworkSnapshot(
@@ -145,6 +193,23 @@ def main() -> None:
                     if loaded.trained
                     else _untrained_state()
                 )
+                if loaded.trained and shadow_controller is not None:
+                    shadow_state = shadow_controller.update(now_ms, latest_prediction)
+                    if (
+                        not shadow_round_logged
+                        and state.lock_time_ms is not None
+                        and shadow_state.lock_time_ms is not None
+                    ):
+                        print(
+                            "Temporal shadow: "
+                            f"active={state.locked_user.name}:{state.lock_time_ms}ms "
+                            f"shadow={shadow_state.locked_user.name}:"
+                            f"{shadow_state.lock_time_ms}ms"
+                        )
+                        shadow_round_logged = True
+                    if state.phase == RoundPhase.READY:
+                        shadow_round_logged = False
+                audio.update(state)
                 now = time.perf_counter()
                 frame_duration = max(now - frame_started, 1e-6)
                 current_fps = 1.0 / frame_duration
@@ -154,10 +219,36 @@ def main() -> None:
                     else 0.1 * current_fps + 0.9 * performance.fps
                 )
                 frame_started = now
-                display = renderer.render(frame, state, snapshot, performance)
+                display = renderer.render(
+                    frame,
+                    state,
+                    snapshot,
+                    performance,
+                    mode=render_mode,
+                )
                 cv2.imshow(window_name, display)
-                if cv2.waitKey(1) & 0xFF in {ord("q"), 27}:
+                key = cv2.waitKey(1) & 0xFF
+                if key in {ord("q"), ord("Q"), 27}:
                     break
+                if key in {ord("n"), ord("N")}:
+                    render_mode = (
+                        RenderMode.NETWORK
+                        if render_mode == RenderMode.GAME
+                        else RenderMode.GAME
+                    )
+                elif key in {ord("m"), ord("M")}:
+                    muted = audio.toggle_muted()
+                    print(f"Audio {'muted' if muted else 'enabled'}")
+                elif key in {ord("r"), ord("R")}:
+                    controller.reset_match()
+                    if shadow_controller is not None:
+                        shadow_controller.reset_match()
+                    shadow_round_logged = False
+                elif key in {ord("c"), ord("C")}:
+                    controller.reset_session()
+                    if shadow_controller is not None:
+                        shadow_controller.reset_session()
+                    shadow_round_logged = False
     finally:
         camera.release()
         cv2.destroyAllWindows()

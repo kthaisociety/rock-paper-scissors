@@ -12,6 +12,7 @@ import numpy as np
 
 from rps.constants import DATA_DIR
 from rps.data import Trajectory, save_trajectory
+from rps.landmark_drawing import draw_mirrored_hand
 from rps.model import CLASS_NAMES
 from rps.setup_assets import AssetError, ensure_hand_landmarker_asset
 from rps.tracking import AsyncHandTracker
@@ -43,8 +44,10 @@ def _draw_capture_ui(
     total: int,
     phase_text: str,
     frame_count: int,
+    landmarks: np.ndarray | None = None,
 ) -> np.ndarray:
     display = cv2.flip(frame, 1)
+    draw_mirrored_hand(display, landmarks)
     cv2.rectangle(display, (20, 20), (display.shape[1] - 20, 145), (12, 22, 30), -1)
     cv2.putText(
         display,
@@ -94,6 +97,7 @@ def capture_trial(
     landmarks: list[np.ndarray] = []
     timestamps: list[int] = []
     handedness: list[str] = []
+    latest_landmarks: np.ndarray | None = None
     aborted = False
 
     while int(time.monotonic_ns() / 1_000_000) <= end_ms:
@@ -105,6 +109,9 @@ def capture_trial(
         result = tracker.latest(after_timestamp_ms=last_tracker_timestamp)
         if result is not None:
             last_tracker_timestamp = result.timestamp_ms
+            latest_landmarks = (
+                result.observation.landmarks if result.observation is not None else None
+            )
             elapsed = result.timestamp_ms - go_ms
             if result.observation is not None and 0 <= elapsed <= 950:
                 landmarks.append(result.observation.landmarks)
@@ -126,6 +133,7 @@ def capture_trial(
             total=total_trials,
             phase_text=phase,
             frame_count=len(timestamps),
+            landmarks=latest_landmarks,
         )
         cv2.imshow("RPS Training Capture", display)
         key = cv2.waitKey(1) & 0xFF

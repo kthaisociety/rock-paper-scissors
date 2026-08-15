@@ -164,6 +164,7 @@ data/landmarks/*
 reports/
 .rps/
 models/*-candidate.pt
+models/temporal_policy-candidate.json
 
 # Spyder project settings
 .spyderproject

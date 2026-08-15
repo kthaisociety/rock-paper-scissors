@@ -14,8 +14,10 @@ dependencies = [
 [project.scripts]
 rps-setup = "rps.cli.setup:main"
 rps-capture = "rps.cli.capture:main"
+rps-review-data = "rps.cli.review_data:main"
 rps-train = "rps.cli.train:main"
 rps-evaluate = "rps.cli.evaluate:main"
+rps-tune-temporal = "rps.cli.tune_temporal:main"
 rps-preflight = "rps.cli.preflight:main"
 rps-demo = "rps.cli.demo:main"
 

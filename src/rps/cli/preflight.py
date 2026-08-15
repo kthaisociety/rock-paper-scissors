@@ -7,9 +7,10 @@ import sys
 import cv2
 
 from rps.checkpoint import CheckpointError, load_checkpoint
-from rps.constants import DEFAULT_CHECKPOINT_PATH
+from rps.constants import DEFAULT_CHECKPOINT_PATH, DEFAULT_TEMPORAL_POLICY_PATH
 from rps.device import benchmark_devices, save_device_benchmark
 from rps.setup_assets import AssetError, ensure_hand_landmarker_asset, file_sha256
+from rps.temporal import TemporalPolicyArtifactError, load_temporal_policy
 from rps.tracking import AsyncHandTracker
 
 
@@ -43,6 +44,22 @@ def main() -> None:
         )
         if loaded.trained:
             print(f"Checkpoint: OK ({loaded.data_fingerprint[:12]}...)")
+            if DEFAULT_TEMPORAL_POLICY_PATH.exists():
+                try:
+                    temporal = load_temporal_policy(
+                        DEFAULT_TEMPORAL_POLICY_PATH,
+                        model_data_fingerprint=loaded.data_fingerprint,
+                        checkpoint_path=DEFAULT_CHECKPOINT_PATH,
+                    )
+                except TemporalPolicyArtifactError as error:
+                    failures.append(str(error))
+                else:
+                    if temporal.status != "promoted":
+                        failures.append("Default temporal policy is not promoted")
+                    else:
+                        print(f"Temporal policy: OK ({temporal.config.kind.value})")
+            else:
+                print("Temporal policy: baseline (no promoted artifact)")
         else:
             print("Checkpoint: UNTRAINED visualization mode allowed")
         benchmark = benchmark_devices(
