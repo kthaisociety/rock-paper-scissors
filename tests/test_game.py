@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import random
+
 import numpy as np
 
 from rps.game import (
@@ -83,6 +85,65 @@ def test_controller_runs_complete_round() -> None:
     assert state.phase == RoundPhase.RESULT
     assert state.outcome == Outcome.AI_WIN
     assert state.message == "AI CALLED IT!"
+
+
+def test_lock_jitter_delays_early_lock_by_a_seeded_offset() -> None:
+    config = GameConfig(hand_stable_ms=0, countdown_ms=0, lock_jitter_ms=100)
+    controller = GameController(config, rng=random.Random(7))
+    expected_offset = random.Random(7).randint(0, 100)
+    threshold = max(200 + expected_offset, 220)
+    expected_lock = next(v for v in range(200, 460, 10) if v >= threshold)
+
+    controller.update(0, prediction(0, (0.9, 0.05, 0.05)))
+    state = None
+    for elapsed in range(200, 460, 10):
+        state = controller.update(elapsed, prediction(elapsed, (0.9, 0.05, 0.05)))
+        if state.phase == RoundPhase.LOCKED:
+            break
+
+    assert state is not None and state.phase == RoundPhase.LOCKED
+    assert state.lock_time_ms == expected_lock
+
+
+def test_lock_jitter_floats_final_window_after_actual_lock() -> None:
+    config = GameConfig(
+        hand_stable_ms=0,
+        countdown_ms=0,
+        lock_jitter_ms=500,
+        post_lock_gap_ms=200,
+        final_hold_ms=300,
+    )
+    controller = GameController(config, rng=random.Random(0))
+    controller.update(0, prediction(0, (0.9, 0.05, 0.05)))
+    state = None
+    for elapsed in range(200, 1200, 10):
+        state = controller.update(elapsed, prediction(elapsed, (0.9, 0.05, 0.05)))
+        if state.phase == RoundPhase.LOCKED:
+            break
+
+    assert state is not None and state.phase == RoundPhase.LOCKED
+    lock_time = state.lock_time_ms
+    assert lock_time is not None
+    assert lock_time > 450, "jitter should be able to push the lock well past the old deadline"
+    assert state.prediction_lead_ms == config.post_lock_gap_ms + config.final_hold_ms
+
+    final_pose_ms = lock_time + config.post_lock_gap_ms + 10
+    controller.update(final_pose_ms, prediction(final_pose_ms, (0.05, 0.05, 0.9)))
+    reveal_ms = lock_time + config.post_lock_gap_ms + config.final_hold_ms
+    result_state = controller.update(reveal_ms, prediction(reveal_ms, (0.05, 0.05, 0.9)))
+    assert result_state.phase == RoundPhase.RESULT
+    assert result_state.final_user == Gesture.SCISSORS
+
+
+def test_lock_jitter_zero_matches_unjittered_timing() -> None:
+    config = GameConfig(hand_stable_ms=0, countdown_ms=0, lock_jitter_ms=0)
+    controller = GameController(config, rng=random.Random(7))
+    controller.update(0, prediction(0, (0.8, 0.1, 0.1)))
+    controller.update(200, prediction(200, (0.85, 0.1, 0.05)))
+    controller.update(220, prediction(220, (0.86, 0.09, 0.05)))
+    state = controller.update(240, prediction(240, (0.87, 0.08, 0.05)))
+    assert state.phase == RoundPhase.LOCKED
+    assert state.lock_time_ms == 240
 
 
 def test_controller_invalidates_round_with_no_prediction() -> None:

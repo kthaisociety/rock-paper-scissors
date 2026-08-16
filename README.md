@@ -48,8 +48,14 @@ preflight without a webcam.
 uv run --locked rps-demo --camera 0 --device auto
 ```
 
-Add `--fullscreen` for the booth display or `--mute` to start without audio. The game uses
-short generated WAV cues through macOS `afplay`; missing audio support degrades silently to
+Add `--fullscreen` for the booth display or `--mute` to start without audio. Each round, the
+AI's earliest possible lock time is randomly delayed by 0 to `--lock-jitter-ms` (default
+1000 ms), and the "hold your final pose" window slides to start 200 ms after wherever it
+actually locks, so the reveal timing cannot be memorized and timed around; pass
+`--lock-jitter-ms 0` to disable jitter and restore the original fixed 200-450 ms window
+(faster rounds, but a learnable rhythm). A larger jitter means slower, more variable rounds;
+tune it down if booth throughput matters more than unpredictability. The game uses short
+generated WAV cues through macOS `afplay`; missing audio support degrades silently to
 visual-only play. Controls are:
 
 - `N`: toggle the combined game view and the expanded neural-network focus view
