@@ -48,6 +48,15 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument("--fullscreen", action="store_true")
     parser.add_argument("--mute", action="store_true", help="Start with sound cues muted")
+    parser.add_argument(
+        "--lock-jitter-ms",
+        type=int,
+        default=1000,
+        help="Random per-round delay (0 to this many ms) added to when the AI is "
+        "allowed to lock in its prediction, so the reveal timing cannot be "
+        "memorized and timed around (0 disables jitter and restores the fixed "
+        "200-450 ms window)",
+    )
     return parser
 
 
@@ -108,7 +117,7 @@ def main() -> None:
         print("Temporal policy not found; using baseline", file=sys.stderr)
 
     controller = GameController(
-        GameConfig(temporal_policy=temporal_config),
+        GameConfig(temporal_policy=temporal_config, lock_jitter_ms=args.lock_jitter_ms),
         score=restored_score,
     )
     persisted_score = controller.view(0).score

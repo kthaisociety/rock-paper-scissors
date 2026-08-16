@@ -1,7 +1,8 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass, field
+import random
+from dataclasses import dataclass, field, replace
 from enum import IntEnum, StrEnum
 
 import numpy as np
@@ -87,6 +88,15 @@ class GameConfig:
     target_points: int = 3
     countdown_labels: tuple[str, str, str] = ("ROCK", "PAPER", "SCISSORS")
     temporal_policy: TemporalPolicyConfig | None = None
+    # Per-round random delay added to both early_lock_start_ms and force_lock_ms so the
+    # AI's actual lock/reveal instant shifts round to round instead of clustering at the
+    # earliest allowed moment; 0 keeps offline replay (train/eval/tune) deterministic.
+    lock_jitter_ms: int = 0
+    # When lock_jitter_ms > 0, the post-lock "hold your final pose" window floats this
+    # many ms after the actual lock time (instead of the fixed final_start_ms/reveal_ms
+    # clock), so a late lock still gets a fair, fixed-length scoring window afterward.
+    post_lock_gap_ms: int = 200
+    final_hold_ms: int = 300
 
 
 @dataclass(slots=True)
@@ -194,12 +204,26 @@ class GameController:
         config: GameConfig | None = None,
         *,
         score: ScoreSnapshot | None = None,
+        rng: random.Random | None = None,
     ) -> None:
         self.config = config or GameConfig()
+        self._rng = rng or random.Random()
         self._event_id = 0
         self.reset_session()
         if score is not None:
             self.restore_score(score)
+
+    def _round_policy_config(self) -> TemporalPolicyConfig:
+        base = _policy_config(self.config)
+        jitter = self.config.lock_jitter_ms
+        if jitter <= 0:
+            return base
+        offset = self._rng.randint(0, jitter)
+        return replace(
+            base,
+            early_lock_start_ms=base.early_lock_start_ms + offset,
+            force_lock_ms=base.force_lock_ms + offset,
+        )
 
     def reset_round(self) -> None:
         self.phase = RoundPhase.READY
@@ -208,7 +232,7 @@ class GameController:
         self._go_timestamp: int | None = None
         self._result_timestamp: int | None = None
         self._absent_since: int | None = None
-        self._policy = TemporalDecisionPolicy(_policy_config(self.config))
+        self._policy = TemporalDecisionPolicy(self._round_policy_config())
         self._ema: np.ndarray | None = None
         self._final_probabilities: list[np.ndarray] = []
         self._last_prediction_timestamp = -1
@@ -219,6 +243,8 @@ class GameController:
         self.match_winner: MatchWinner | None = None
         self.lock_time_ms: int | None = None
         self.lock_reason: LockReason | None = None
+        self._final_start_ms = self.config.final_start_ms
+        self._reveal_ms = self.config.reveal_ms
         self.effect_event: str | None = None
         self.probability_trace: list[tuple[int, list[float]]] = []
         self._message = "Hold a closed fist in the frame"
@@ -348,6 +374,9 @@ class GameController:
         self.ai_move = counter_move(self.locked_user)
         self.lock_time_ms = decision.lock_time_ms
         self.lock_reason = decision.reason
+        if self.config.lock_jitter_ms > 0:
+            self._final_start_ms = self.lock_time_ms + self.config.post_lock_gap_ms
+            self._reveal_ms = self._final_start_ms + self.config.final_hold_ms
         self.phase = RoundPhase.LOCKED
         self._message = f"I PREDICT {self.locked_user.name}"
 
@@ -435,12 +464,12 @@ class GameController:
                 self.phase == RoundPhase.LOCKED
                 and hand_result is not None
                 and is_new_prediction
-                and self.config.final_start_ms <= prediction_elapsed_ms <= self.config.reveal_ms
+                and self._final_start_ms <= prediction_elapsed_ms <= self._reveal_ms
             ):
                 self._final_probabilities.append(
                     np.asarray(hand_result.probabilities, dtype=np.float32).reshape(3)
                 )
-            if self.phase == RoundPhase.LOCKED and elapsed_ms >= self.config.reveal_ms:
+            if self.phase == RoundPhase.LOCKED and elapsed_ms >= self._reveal_ms:
                 if not self._final_probabilities:
                     self.reset_round()
                     self._message = "Final gesture missing - try again"
@@ -519,7 +548,7 @@ class GameController:
         probabilities = self._ema.copy() if self._ema is not None else np.zeros(3, dtype=np.float32)
         lead = None
         if self.lock_time_ms is not None:
-            lead = self.config.reveal_ms - self.lock_time_ms
+            lead = self._reveal_ms - self.lock_time_ms
         return GameViewState(
             phase=self.phase,
             message=self._message,
